@@ -60,6 +60,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@repo/math':
+        specifier: workspace:^
+        version: link:../../packages/math
       '@repo/ui':
         specifier: workspace:*
         version: link:../../packages/ui

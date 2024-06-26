@@ -1,8 +1,11 @@
 import Image from "next/image";
 import { Button } from "@repo/ui/button";
+import { add } from "@repo/math/add";
 import styles from "./page.module.css";
 
 export default function Home() {
+  console.log(add(3, 2));
+
   return (
     <div className={styles.page}>
       <main className={styles.main}>

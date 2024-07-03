@@ -16,4 +16,6 @@ function generateData() {
 }
 const json = JSON.stringify(Array.from({ length: 100 }, generateData), null, 2);
 
-Properties.test(json, 'aes-256-gcm');
+const propertiesService = new Properties();
+const data = propertiesService.process(json);
+console.log(data)

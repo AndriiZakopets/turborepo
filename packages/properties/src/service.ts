@@ -9,12 +9,12 @@ const CRYPTO_CONFIG: CryptoConfig = {
 
 export class Properties {
     private encryptData(data: string): string {
-        const crypto = new Crypto(CRYPTO_CONFIG);
+        const crypto = Crypto.fromConfig(CRYPTO_CONFIG);
         return crypto.encrypt(data);
     }
     
     private decryptData(data: string): string {
-        const crypto = new Crypto(CRYPTO_CONFIG);
+        const crypto = Crypto.fromConfig(CRYPTO_CONFIG);
         return crypto.encrypt(data);
     }
     
@@ -26,5 +26,9 @@ export class Properties {
         return lz.decompress(data);
     }
 
-    
+    public process(data: string): string {
+        const encrypted = this.encryptData(data);
+        const compressed = this.compressData(encrypted);
+        return compressed;
+    }
 }

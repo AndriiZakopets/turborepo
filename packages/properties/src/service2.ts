@@ -1,7 +1,9 @@
 // Interfaces
-interface IPropertyStrategy {
+interface IPropertyStrategy<T = any> {
     encode(data: any): Promise<string>;
     decode(data: string): Promise<any>;
+    readonly strategyName: string;
+    readonly parameters: T;
 }
 
 interface IPropertyEntity {
@@ -10,8 +12,35 @@ interface IPropertyEntity {
     deleteData(key: string, ...args: any[]): Promise<void>;
 }
 
+interface StoredPropertyData {
+    data: string;
+    strategyIds: string[];
+}
+
+// Strategy Registry
+class StrategyRegistry {
+    private strategies: Map<string, IPropertyStrategy> = new Map();
+
+    registerStrategy(strategy: IPropertyStrategy): string {
+        const id = this.generateUniqueId(strategy);
+        this.strategies.set(id, strategy);
+        return id;
+    }
+
+    getStrategy(id: string): IPropertyStrategy | undefined {
+        return this.strategies.get(id);
+    }
+
+    private generateUniqueId(strategy: IPropertyStrategy): string {
+        return `${strategy.strategyName}-${JSON.stringify(strategy.parameters)}`;
+    }
+}
+
 // Strategy implementations
 class EncodingStrategy implements IPropertyStrategy {
+    readonly strategyName = 'EncodingStrategy';
+    readonly parameters = {};
+
     async encode(data: any): Promise<string> {
         return Buffer.from(JSON.stringify(data)).toString('base64');
     }
@@ -22,33 +51,45 @@ class EncodingStrategy implements IPropertyStrategy {
 }
 
 class EncryptionStrategy implements IPropertyStrategy {
+    readonly strategyName = 'EncryptionStrategy';
+    readonly parameters = {};
+
     async encode(data: any): Promise<string> {
         // Placeholder for encryption logic
-        return data;
+        return `encrypted:${data}`;
     }
 
     async decode(data: string): Promise<any> {
         // Placeholder for decryption logic
-        return data;
+        return data.replace('encrypted:', '');
     }
 }
 
-class ChunkingStrategy implements IPropertyStrategy {
-    private chunkSize: number;
-    private jiraApi: any;
-    private propertyNameGenerator: (chunkNumber: number) => string;
+interface ChunkingStrategyParameters {
+    chunkSize: number;
+    basePropertyName: string;
+}
 
-    constructor(jiraApi: any, chunkSize: number = 32768, propertyNameGenerator: (chunkNumber: number) => string) {
+class ChunkingStrategy implements IPropertyStrategy<ChunkingStrategyParameters> {
+    readonly strategyName = 'ChunkingStrategy';
+    readonly parameters: ChunkingStrategyParameters;
+
+    private jiraApi: any;
+
+    constructor(jiraApi: any, parameters: ChunkingStrategyParameters) {
         this.jiraApi = jiraApi;
-        this.chunkSize = chunkSize;
-        this.propertyNameGenerator = propertyNameGenerator;
+        this.parameters = parameters;
+    }
+
+    private getChunkPropertyName(chunkNumber: number): string {
+        return `${this.parameters.basePropertyName}.chunk${chunkNumber}`;
     }
 
     async encode(data: any): Promise<string> {
         const jsonData = JSON.stringify(data);
         const chunks = [];
-        for (let i = 0; i < jsonData.length; i += this.chunkSize) {
-            chunks.push(jsonData.slice(i, i + this.chunkSize));
+        for (let i = 0; i < jsonData.length; i += this.parameters.chunkSize) {
+            chunks.push(jsonData.slice(i, i + this.parameters.chunkSize));
         }
         const metadata = {
             totalChunks: chunks.length,
@@ -56,7 +97,7 @@ class ChunkingStrategy implements IPropertyStrategy {
         };
 
         // Store chunks in separate properties
-        await Promise.all(chunks.map((chunk, index) => this.jiraApi.setProperty(this.propertyNameGenerator(index), chunk)));
+        await Promise.all(chunks.map((chunk, index) => this.jiraApi.setProperty(this.getChunkPropertyName(index), chunk)));
 
         // Return metadata
         return JSON.stringify(metadata);
@@ -64,7 +105,7 @@ class ChunkingStrategy implements IPropertyStrategy {
 
     async decode(metadata: string): Promise<any> {
         const { totalChunks, hash } = JSON.parse(metadata);
-        const chunks = await Promise.all(Array.from({ length: totalChunks }, (_, i) => this.jiraApi.getProperty(this.propertyNameGenerator(i))));
+        const chunks = await Promise.all(Array.from({ length: totalChunks }, (_, i) => this.jiraApi.getProperty(this.getChunkPropertyName(i))));
 
         const reconstructedData = chunks.join('');
         if (this.calculateHash(reconstructedData) !== hash) {
@@ -81,87 +122,106 @@ class ChunkingStrategy implements IPropertyStrategy {
 
 // Base Property Entity
 abstract class BasePropertyEntity implements IPropertyEntity {
-    protected jiraApi: any; // Replace 'any' with actual JiraApi type
-    protected strategies: IPropertyStrategy[] = [];
+    protected jiraApi: any;
+    protected strategyRegistry: StrategyRegistry;
+    protected currentStrategyIds: string[] = [];
 
-    constructor(jiraApi: any) {
+    constructor(jiraApi: any, strategyRegistry: StrategyRegistry) {
         this.jiraApi = jiraApi;
+        this.strategyRegistry = strategyRegistry;
     }
 
     protected abstract getPropertyName(...args: any[]): string;
 
-    protected async processData(data: any, encode: boolean): Promise<any> {
-        let processedData = data;
-        for (const strategy of encode ? this.strategies : this.strategies.slice().reverse()) {
+    protected async processData(storedData: StoredPropertyData, encode: boolean): Promise<any> {
+        let processedData = encode ? storedData.data : storedData;
+        const strategyIds = encode ? this.currentStrategyIds : storedData.strategyIds;
+        const strategySequence = encode ? strategyIds : [...strategyIds].reverse();
+
+        for (const id of strategySequence) {
+            const strategy = this.strategyRegistry.getStrategy(id);
+            if (!strategy) {
+                throw new Error(`Strategy with id ${id} not found`);
+            }
             processedData = await (encode ? strategy.encode(processedData) : strategy.decode(processedData));
         }
+
+        if (encode) {
+            return {
+                data: processedData,
+                strategyIds: this.currentStrategyIds,
+            };
+        }
+
         return processedData;
     }
 
     async getData(key: string, ...args: any[]): Promise<any> {
         const propertyName = this.getPropertyName(...args);
         const rawData = await this.jiraApi.getProperty(key, propertyName);
-        return this.processData(rawData, false);
+        if (!rawData) return null;
+
+        const storedData: StoredPropertyData = JSON.parse(rawData);
+        return this.processData(storedData, false);
     }
 
     async setData(key: string, data: any, ...args: any[]): Promise<void> {
         const propertyName = this.getPropertyName(...args);
-        const processedData = await this.processData(data, true);
-        await this.jiraApi.setProperty(key, propertyName, processedData);
+        const processedData = await this.processData({ data, strategyIds: [] }, true);
+        await this.jiraApi.setProperty(key, propertyName, JSON.stringify(processedData));
     }
 
     async deleteData(key: string, ...args: any[]): Promise<void> {
         const propertyName = this.getPropertyName(...args);
         await this.jiraApi.deleteProperty(key, propertyName);
     }
+
+    updateStrategies(newStrategies: IPropertyStrategy[]): void {
+        this.currentStrategyIds = newStrategies.map((strategy) => this.strategyRegistry.registerStrategy(strategy));
+    }
 }
 
 // Concrete Property Entities
 class FormDataEntity extends BasePropertyEntity {
-    private currentFormNumber: number = 0;
-    private currentVersionNumber: number = 0;
-
-    constructor(jiraApi: any) {
-        super(jiraApi);
-        this.strategies = [
-            new ChunkingStrategy(jiraApi, 32768, (chunkNumber: number) =>
-                this.getPropertyName(this.currentFormNumber, this.currentVersionNumber, chunkNumber)
-            ),
-            new EncryptionStrategy(),
+    constructor(jiraApi: any, strategyRegistry: StrategyRegistry) {
+        super(jiraApi, strategyRegistry);
+        this.updateStrategies([
+            new ChunkingStrategy(jiraApi, {
+                chunkSize: 32768,
+                basePropertyName: 'formData',
+            }),
             new EncodingStrategy(),
-        ];
+        ]);
     }
 
-    protected getPropertyName(formNumber: number, versionNumber: number, chunkNumber: number = 0): string {
-        return `formData.v${versionNumber}.${chunkNumber}.${formNumber}`;
+    protected getPropertyName(formNumber: number, versionNumber: number): string {
+        return `formData.v${versionNumber}.${formNumber}`;
     }
 
     async getData(issueKey: string, formNumber: number, versionNumber: number): Promise<any> {
-        this.currentFormNumber = formNumber;
-        this.currentVersionNumber = versionNumber;
         return super.getData(issueKey, formNumber, versionNumber);
     }
 
     async setData(issueKey: string, data: any, formNumber: number, versionNumber: number): Promise<void> {
-        this.currentFormNumber = formNumber;
-        this.currentVersionNumber = versionNumber;
         return super.setData(issueKey, data, formNumber, versionNumber);
     }
 
     async deleteData(issueKey: string, formNumber: number, versionNumber: number): Promise<void> {
-        this.currentFormNumber = formNumber;
-        this.currentVersionNumber = versionNumber;
         return super.deleteData(issueKey, formNumber, versionNumber);
+    }
+
+    updateFormDataStrategies(newStrategies: IPropertyStrategy[]): void {
+        this.updateStrategies(newStrategies);
     }
 }
 
-// Updated IsAutoAddTriggeredEntity
+// IsAutoAddTriggeredEntity
 class IsAutoAddTriggeredEntity extends BasePropertyEntity {
     private readonly propertyName = 'isAutoAddTriggered';
 
-    constructor(jiraApi: any) {
-        super(jiraApi);
-        // No strategies for this entity, so we leave the strategies array empty
+    constructor(jiraApi: any, strategyRegistry: StrategyRegistry) {
+        super(jiraApi, strategyRegistry);
+        // No strategies for this entity
     }
 
     protected getPropertyName(): string {
@@ -180,14 +240,16 @@ class IsAutoAddTriggeredEntity extends BasePropertyEntity {
 
 // Main Service
 class PropertiesService {
-    private jiraApi: any; // Replace 'any' with actual JiraApi type
+    private jiraApi: any;
+    private strategyRegistry: StrategyRegistry;
     formData: FormDataEntity;
     isAutoAddTriggered: IsAutoAddTriggeredEntity;
 
     constructor(jiraApi: any) {
         this.jiraApi = jiraApi;
-        this.formData = new FormDataEntity(jiraApi);
-        this.isAutoAddTriggered = new IsAutoAddTriggeredEntity(jiraApi);
+        this.strategyRegistry = new StrategyRegistry();
+        this.formData = new FormDataEntity(jiraApi, this.strategyRegistry);
+        this.isAutoAddTriggered = new IsAutoAddTriggeredEntity(jiraApi, this.strategyRegistry);
     }
 }
 
@@ -201,10 +263,27 @@ async function example() {
     const formNumber = 1;
     const formVersion = 2;
 
-    // Using FormDataEntity
+    // Using FormDataEntity with initial strategies
     await propertiesService.formData.setData(issueKey, { name: 'John Doe' }, formNumber, formVersion);
-    const formData = await propertiesService.formData.getData(issueKey, formNumber, formVersion);
+    let formData = await propertiesService.formData.getData(issueKey, formNumber, formVersion);
     console.log(formData); // { name: 'John Doe' }
+
+    // Update strategies: reorder and add new strategy
+    propertiesService.formData.updateFormDataStrategies([
+        new EncodingStrategy(),
+        new ChunkingStrategy(jiraApi, {
+            chunkSize: 32768,
+            basePropertyName: 'formData',
+        }),
+        new EncryptionStrategy(),
+    ]);
+
+    // Set new data with updated strategies
+    await propertiesService.formData.setData(issueKey, { name: 'Jane Doe' }, formNumber, formVersion);
+
+    // Get data (this will work for both old and new versions)
+    formData = await propertiesService.formData.getData(issueKey, formNumber, formVersion);
+    console.log(formData); // { name: 'Jane Doe' }
 
     await propertiesService.formData.deleteData(issueKey, formNumber, formVersion);
 

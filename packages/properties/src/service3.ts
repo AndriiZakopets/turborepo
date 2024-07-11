@@ -1,5 +1,9 @@
+type PropertiesObject = {
+    [key: string]: any;
+};
+
 // Base Property Entity
-abstract class RawPropertyEntity {
+abstract class RawPropertyEntity<T extends any> {
     protected jiraApi: any;
     protected abstract propertyName: string;
 
@@ -20,11 +24,11 @@ abstract class RawPropertyEntity {
     };
 
 
-    public async setValue(value: any): Promise<void> {
+    public async setValue(value: T): Promise<void> {
         await this.setPropertyValue(value);
     };
 
-    public async getValue(): Promise<any> {
+    public async getValue(): Promise<T> {
         return this.getPropertyValue();
     };
 
@@ -32,19 +36,28 @@ abstract class RawPropertyEntity {
         await this.deletePropertyValue();
     };
 
-    public async getValueFromPropertiesObject(properties: any): Promise<any> {
+    public async getValueFromPropertiesObject(properties: PropertiesObject): Promise<any> {
         return properties[this.propertyName];
     }
 
-    public async getPropertiesObjectFromValue(value: any): Promise<any> {
+    public async getPropertiesObjectFromValue(value: T): Promise<PropertiesObject> {
         return {
             [this.propertyName]: value,
         };
     }
 }
 
-class SubmitEntityProperty extends RawPropertyEntity {
+type SubmitEntityPropertyValue = {
+    idFormsSubmit: string[];
+    nameFormsSubmit: string[];
+};
+class SubmitEntityProperty extends RawPropertyEntity<SubmitEntityPropertyValue> {
     protected propertyName = 'data';
+}
+
+type IsAutoAddTriggeredPropertyValue = boolean;
+class IsAutoAddTriggeredProperty extends RawPropertyEntity<IsAutoAddTriggeredPropertyValue> {
+    protected propertyName = 'isAutoAddTriggered';
 }
 
 export const jiraApi = {
@@ -64,7 +77,18 @@ export const jiraApi = {
 
 export class PropertisesService {
     submitEntity: SubmitEntityProperty;
+    isAutoAddTriggered: IsAutoAddTriggeredProperty;
+
     constructor(private jiraApi: any) {
         this.submitEntity = new SubmitEntityProperty(this.jiraApi);
+        this.isAutoAddTriggered = new IsAutoAddTriggeredProperty(this.jiraApi);
     }
 }
+
+async function main() {
+    const propertiesService = new PropertisesService(jiraApi);
+    const data = await propertiesService.submitEntity.getValue();
+    console.log(data);
+}
+
+main();

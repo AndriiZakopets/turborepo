@@ -47,8 +47,23 @@ class SubmitEntityProperty extends RawPropertyEntity {
     protected propertyName = 'data';
 }
 
-export class PopulateService {
-    submitEntity: any;
+export const jiraApi = {
+    issueProperties: {
+        getIssueProperty: async (propertyName: string) => {
+            console.log(`Getting property: ${propertyName}`);
+        },
+        setIssueProperty: async (propertyName: string, value: any) => {
+            console.log(`Setting property: ${propertyName}`);
+            console.log(value);
+        },
+        deleteIssueProperty: async (propertyName: string) => {
+            console.log(`Deleting property: ${propertyName}`);
+        },
+    },
+}
+
+export class PropertisesService {
+    submitEntity: SubmitEntityProperty;
     constructor(private jiraApi: any) {
         this.submitEntity = new SubmitEntityProperty(this.jiraApi);
     }

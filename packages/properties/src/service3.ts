@@ -1,57 +1,55 @@
 // Base Property Entity
 abstract class RawPropertyEntity {
     protected jiraApi: any;
+    protected abstract propertyName: string;
 
     constructor(jiraApi: any) {
         this.jiraApi = jiraApi;
     }
 
-    protected abstract getPropertyName(...args: any[]): string;
+    protected async getPropertyValue(): Promise<any> {
+        return this.jiraApi.issueProperties.getIssueProperty(this.propertyName);
+    };
 
-    protected async processData(storedData: StoredPropertyData, encode: boolean): Promise<any> {
-        let processedData = encode ? storedData.data : storedData;
-        const strategyIds = encode ? this.currentStrategyIds : storedData.strategyIds;
-        const strategySequence = encode ? strategyIds : [...strategyIds].reverse();
+    protected async setPropertyValue(value: any): Promise<any> {
+        return this.jiraApi.issueProperties.setIssueProperty(this.propertyName, value);
+    };
 
-        for (const id of strategySequence) {
-            const strategy = this.strategyRegistry.getStrategy(id);
-            if (!strategy) {
-                throw new Error(`Strategy with id ${id} not found`);
-            }
-            processedData = await (encode ? strategy.encode(processedData) : strategy.decode(processedData));
-        }
+    protected async deletePropertyValue(): Promise<void> {
+        return this.jiraApi.issueProperties.deleteIssueProperty(this.propertyName);
+    };
 
-        if (encode) {
-            return {
-                data: processedData,
-                strategyIds: this.currentStrategyIds,
-            };
-        }
 
-        return processedData;
+    public async setValue(value: any): Promise<void> {
+        await this.setPropertyValue(value);
+    };
+
+    public async getValue(): Promise<any> {
+        return this.getPropertyValue();
+    };
+
+    public async deleteValue(): Promise<void> {
+        await this.deletePropertyValue();
+    };
+
+    public async getValueFromPropertiesObject(properties: any): Promise<any> {
+        return properties[this.propertyName];
     }
 
-    async getData(key: string, ...args: any[]): Promise<any> {
-        const propertyName = this.getPropertyName(...args);
-        const rawData = await this.jiraApi.getProperty(key, propertyName);
-        if (!rawData) return null;
-
-        const storedData: StoredPropertyData = JSON.parse(rawData);
-        return this.processData(storedData, false);
+    public async getPropertiesObjectFromValue(value: any): Promise<any> {
+        return {
+            [this.propertyName]: value,
+        };
     }
+}
 
-    async setData(key: string, data: any, ...args: any[]): Promise<void> {
-        const propertyName = this.getPropertyName(...args);
-        const processedData = await this.processData({ data, strategyIds: [] }, true);
-        await this.jiraApi.setProperty(key, propertyName, JSON.stringify(processedData));
-    }
+class SubmitEntityProperty extends RawPropertyEntity {
+    protected propertyName = 'data';
+}
 
-    async deleteData(key: string, ...args: any[]): Promise<void> {
-        const propertyName = this.getPropertyName(...args);
-        await this.jiraApi.deleteProperty(key, propertyName);
-    }
-
-    updateStrategies(newStrategies: IPropertyStrategy[]): void {
-        this.currentStrategyIds = newStrategies.map((strategy) => this.strategyRegistry.registerStrategy(strategy));
+export class PopulateService {
+    submitEntity: any;
+    constructor(private jiraApi: any) {
+        this.submitEntity = new SubmitEntityProperty(this.jiraApi);
     }
 }

@@ -1,7 +1,7 @@
 {
   "name": "@repo/properties",
   "scripts": {
-    "dev": "nodemon --exec ts-node src/index.ts"
+    "dev": "nodemon --exec ts-node src/b.ts"
   },
   "dependencies": {
     "@faker-js/faker": "^8.4.1",
